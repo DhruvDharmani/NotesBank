@@ -327,6 +327,12 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 
 async function loadProfile() {
+  if (!currentUser) {
+    // Try to recover session
+    const { data: { session } } = await sb.auth.getSession();
+    if (session) currentUser = session.user;
+    else return;
+  }
   const { data, error } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
   if (data) {
     currentProfile = data;
@@ -441,7 +447,7 @@ function showAuthError(el, msg) {
 }
 
 // ── NAVIGATION ─────────────────────────────────────────────
-function navigate(page) {
+async function navigate(page) {
   currentPage = page;
   document.querySelectorAll('.nav-link').forEach(el=>el.classList.remove('active'));
   const navEl = document.getElementById('nav-'+page);
@@ -451,7 +457,11 @@ function navigate(page) {
   if (notifOpen) toggleNotifications();
   const content = document.getElementById('page-content');
   content.innerHTML = skeletonLoader();
-  setTimeout(() => renderPage(page), 50);
+  // If profile not loaded yet, reload it first before rendering
+  if (!currentProfile && currentUser) {
+    await loadProfile();
+  }
+  await renderPage(page);
 }
 
 function skeletonLoader() {
@@ -470,8 +480,18 @@ async function renderPage(page) {
 
 // ── DASHBOARD ──────────────────────────────────────────────
 async function renderDashboard() {
+  const content = document.getElementById('page-content');
+  // If still no profile after reload attempt, show friendly error
+  if (!currentProfile) {
+    content.innerHTML = `<div style="text-align:center;padding:64px;display:flex;flex-direction:column;align-items:center;gap:16px">
+      <span class="material-symbols-outlined" style="font-size:48px;color:#c3c6d5">person_off</span>
+      <div style="font-weight:700;font-size:18px;color:#1e293b">Couldn't load your profile</div>
+      <div style="color:#64748b;max-width:360px;text-align:center">Your account exists but your profile data is missing. Please sign out and sign back in.</div>
+      <button onclick="doLogout()" class="btn-primary" style="padding:12px 24px;margin-top:8px">Sign Out & Back In</button>
+    </div>`;
+    return;
+  }
   const p = currentProfile;
-  if (!p) return;
   const progressPct = Math.min(((p.points % 500) / 500 * 100), 100);
 
   // Load recent notes (approved)
@@ -778,8 +798,8 @@ function switchLbTab(t){lbTab=t;navigate('leaderboard');}
 
 // ── PROFILE ────────────────────────────────────────────────
 async function renderProfile() {
+  if (!currentProfile) { await loadProfile(); }
   const p = currentProfile;
-  if (!p) return;
   const { data: subjects } = await sb.from('profile_subjects').select('subject').eq('user_id',p.id);
   const { data: myNotes } = await sb.from('notes').select('*').eq('author_id',p.id).order('created_at',{ascending:false});
   const progressPct = Math.min(((p.points%500)/500*100),100);
