@@ -929,18 +929,36 @@ async function renderAdmin() {
     document.getElementById('page-content').innerHTML = '<div style="text-align:center;padding:64px;color:#64748b">Access denied. Moderator role required.</div>';
     return;
   }
-  // Fetch ALL notes with no filters at all
-  const { data: allNotesRaw, error: notesErr } = await sb
-    .from('notes')
-    .select('id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)');
+  // Use direct REST fetch to bypass any client-side issues
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const accessToken = session?.access_token || SUPA_KEY;
 
-  console.log('Admin fetch result:', allNotesRaw, 'Error:', notesErr);
+  let allNotes = [];
+  try {
+    const res = await fetch(
+      `${SUPA_URL}/rest/v1/notes?select=id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)&order=created_at.desc`,
+      {
+        headers: {
+          'apikey': SUPA_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        }
+      }
+    );
+    const text = await res.text();
+    console.log('Direct REST response status:', res.status);
+    console.log('Direct REST response:', text.substring(0, 300));
+    allNotes = JSON.parse(text) || [];
+  } catch(e) {
+    console.error('Direct REST error:', e);
+  }
 
-  const allNotes = allNotesRaw || [];
   const pending = allNotes.filter(n => n.status === 'pending');
   const flagged = allNotes.filter(n => n.status === 'flagged');
   const approved = allNotes.filter(n => n.status === 'approved');
-
   console.log('Pending:', pending.length, 'Flagged:', flagged.length, 'Approved:', approved.length);
   const listData = adminTab==='pending'?pending:adminTab==='flagged'?flagged:approved;
 
@@ -993,11 +1011,32 @@ async function renderAdmin() {
 }
 
 async function moderateNote(id, status) {
-  const { error } = await sb.from('notes').update({ status, reviewed_by: currentUser.id, reviewed_at: new Date().toISOString() }).eq('id', id);
-  if (error) { showToast('Error updating note: '+error.message, true); return; }
-  const msgs = {approved:'Note approved & published! Author notified ✓', flagged:'Note flagged for review', pending:'Note unpublished'};
-  showToast(msgs[status]||'Updated');
-  navigate('admin');
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const accessToken = session?.access_token || SUPA_KEY;
+  try {
+    const res = await fetch(
+      `${SUPA_URL}/rest/v1/notes?id=eq.${id}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': SUPA_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({ status, reviewed_by: currentUser.id, reviewed_at: new Date().toISOString() })
+      }
+    );
+    console.log('Moderate response:', res.status);
+    if (!res.ok) { const t = await res.text(); showToast('Error: '+t, true); return; }
+    const msgs = {approved:'Note approved & published! ✓', flagged:'Note flagged for review', pending:'Note unpublished'};
+    showToast(msgs[status]||'Updated');
+    navigate('admin');
+  } catch(e) {
+    showToast('Error: '+e.message, true);
+  }
 }
 
 async function assignModerator() {
