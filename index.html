@@ -312,32 +312,49 @@ window.addEventListener('DOMContentLoaded', async () => {
     currentUser = session.user;
     await loadProfile();
     showApp();
+  } else {
+    showLogin();
   }
-  // Listen for auth state changes (e.g. tab restore)
   sb.auth.onAuthStateChange(async (event, session) => {
-    if (event === 'SIGNED_IN' && session) {
+    if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) {
       currentUser = session.user;
       await loadProfile();
-      showApp();
+      if (document.querySelector('[data-page="login"]').style.display !== 'none') showApp();
     } else if (event === 'SIGNED_OUT') {
       currentUser = null; currentProfile = null;
       showLogin();
     }
   });
+  // Re-render when user switches back to this browser tab
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && currentUser) {
+      await ensureSession();
+      if (document.querySelector('[data-page="app"]').style.display !== 'none') {
+        await renderPage(currentPage);
+      }
+    }
+  });
 });
 
-async function loadProfile() {
-  if (!currentUser) {
-    // Try to recover session
+async function ensureSession() {
+  try {
     const { data: { session } } = await sb.auth.getSession();
-    if (session) currentUser = session.user;
-    else return;
-  }
-  const { data, error } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
-  if (data) {
-    currentProfile = data;
-    updateSidebarUI();
-  }
+    if (!session) {
+      const { data: refreshed } = await sb.auth.refreshSession();
+      if (refreshed?.session) { currentUser = refreshed.session.user; }
+      else { currentUser = null; currentProfile = null; showLogin(); return false; }
+    } else {
+      currentUser = session.user;
+    }
+    await loadProfile();
+    return true;
+  } catch(e) { return false; }
+}
+
+async function loadProfile() {
+  if (!currentUser) return;
+  const { data } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
+  if (data) { currentProfile = data; updateSidebarUI(); }
 }
 
 function showApp() {
@@ -457,10 +474,9 @@ async function navigate(page) {
   if (notifOpen) toggleNotifications();
   const content = document.getElementById('page-content');
   content.innerHTML = skeletonLoader();
-  // If profile not loaded yet, reload it first before rendering
-  if (!currentProfile && currentUser) {
-    await loadProfile();
-  }
+  // Always ensure session + fresh profile before rendering
+  const ok = await ensureSession();
+  if (!ok) return;
   await renderPage(page);
 }
 
@@ -890,9 +906,11 @@ async function renderAdmin() {
     document.getElementById('page-content').innerHTML = '<div style="text-align:center;padding:64px;color:#64748b">Access denied. Moderator role required.</div>';
     return;
   }
-  const { data: pending } = await sb.from('notes').select('*, profiles(full_name)').eq('status','pending').order('created_at',{ascending:false});
-  const { data: flagged } = await sb.from('notes').select('*, profiles(full_name)').eq('status','flagged').order('created_at',{ascending:false});
-  const { data: approved } = await sb.from('notes').select('*, profiles(full_name)').eq('status','approved').order('created_at',{ascending:false}).limit(20);
+  // Fetch all notes regardless of status for moderators
+  const { data: allNotes } = await sb.from('notes').select('*, profiles(full_name)').order('created_at',{ascending:false});
+  const pending = (allNotes||[]).filter(n=>n.status==='pending');
+  const flagged = (allNotes||[]).filter(n=>n.status==='flagged');
+  const approved = (allNotes||[]).filter(n=>n.status==='approved');
   const listData = adminTab==='pending'?pending:adminTab==='flagged'?flagged:approved;
 
   document.getElementById('page-content').innerHTML = `
