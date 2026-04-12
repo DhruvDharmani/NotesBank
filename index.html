@@ -649,13 +649,17 @@ async function renderHub() {
   let notesData = [], requestsData = [];
   if (hubTab === 'find') {
     try {
+      // Fetch all notes then filter — avoids query param issues
       const res = await fetch(
-        `${SUPA_URL}/rest/v1/notes?select=id,title,grade,subject,topic,format,status,like_count,view_count,comment_count,file_path,created_at,author_id&status=eq.approved&order=created_at.desc`,
-        { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${hubToken}` } }
+        `${SUPA_URL}/rest/v1/notes?select=id,title,grade,subject,topic,format,status,like_count,view_count,comment_count,file_path,created_at,author_id&order=created_at.desc`,
+        { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${hubToken}`, 'Accept': 'application/json' } }
       );
-      const notes = await res.json();
-      if (Array.isArray(notes) && notes.length > 0) {
-        // Fetch author names
+      console.log('Hub REST status:', res.status);
+      const allFetched = await res.json();
+      console.log('Hub all notes:', allFetched);
+      const notes = Array.isArray(allFetched) ? allFetched.filter(n => n.status === 'approved') : [];
+      console.log('Hub approved notes:', notes.length);
+      if (notes.length > 0) {
         const authorIds = [...new Set(notes.map(n => n.author_id))];
         const profRes = await fetch(
           `${SUPA_URL}/rest/v1/profiles?select=id,full_name&id=in.(${authorIds.join(',')})`,
@@ -781,32 +785,138 @@ function noteCardHTML(n) {
         <span class="material-symbols-outlined" style="font-size:16px">favorite</span><span id="like-count-${n.id}">${n.like_count}</span>
       </button>
       <span style="display:flex;align-items:center;gap:4px;font-size:13px;color:#64748b"><span class="material-symbols-outlined" style="font-size:16px">visibility</span>${n.view_count}</span>
-      <span style="display:flex;align-items:center;gap:4px;font-size:13px;color:#64748b"><span class="material-symbols-outlined" style="font-size:16px">comment</span>${n.comment_count}</span>
+      <button onclick="event.stopPropagation();openCommentModal(${n.id},'${(n.title||'').replace(/'/g,"\'")}')" style="display:flex;align-items:center;gap:4px;font-size:13px;color:#64748b;background:none;border:none;cursor:pointer;font-family:'Manrope',sans-serif"><span class="material-symbols-outlined" style="font-size:16px">comment</span>${n.comment_count}</button>
       ${n.file_path ? `<button onclick="event.stopPropagation();downloadNote(${n.id},'${n.file_path}')" class="btn-primary" style="margin-left:auto;padding:7px 12px;font-size:12px;display:flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:15px">download</span>Get</button>` : ''}
     </div>
   </div>`;
 }
 
 async function viewNote(id) {
-  await sb.rpc('increment_view', { note_id: id });
+  // Increment view via REST
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPA_KEY;
+  await fetch(`${SUPA_URL}/rest/v1/rpc/increment_view`, {
+    method: 'POST',
+    headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note_id: id })
+  });
+}
+
+async function openCommentModal(noteId, noteTitle) {
+  // Show comment modal
+  const existing = document.getElementById('comment-modal');
+  if (existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.id = 'comment-modal';
+  modal.className = 'modal-overlay open';
+  modal.innerHTML = `
+    <div style="background:white;border-radius:28px;padding:32px;width:100%;max-width:480px;margin:16px;max-height:80vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div><h3 class="font-headline" style="font-size:20px;font-weight:800;color:#1e3a5f">Comments</h3><p style="font-size:12px;color:#64748b;margin-top:2px">${noteTitle}</p></div>
+        <button onclick="document.getElementById('comment-modal').remove()" style="padding:8px;border-radius:50%;border:none;background:#f1f5f9;cursor:pointer"><span class="material-symbols-outlined">close</span></button>
+      </div>
+      <div id="comment-list" style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px">
+        <div style="text-align:center;color:#64748b;font-size:13px;padding:20px">Loading comments...</div>
+      </div>
+      <div style="border-top:1px solid #f1f5f9;padding-top:16px;display:flex;gap:10px">
+        <textarea id="comment-input" rows="2" placeholder="Write a comment..." class="input-field" style="flex:1;resize:none"></textarea>
+        <button onclick="submitComment(${noteId})" class="btn-primary" style="padding:10px 16px;align-self:flex-end">Post</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  // Load existing comments
+  await loadComments(noteId);
+}
+
+async function loadComments(noteId) {
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPA_KEY;
+  const res = await fetch(`${SUPA_URL}/rest/v1/comments?note_id=eq.${noteId}&select=id,body,created_at,author_id&order=created_at.asc`, {
+    headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${token}` }
+  });
+  const comments = await res.json();
+  const list = document.getElementById('comment-list');
+  if (!list) return;
+  if (!Array.isArray(comments) || comments.length === 0) {
+    list.innerHTML = '<div style="text-align:center;color:#94a3b8;font-size:13px;padding:20px">No comments yet. Be the first!</div>';
+    return;
+  }
+  // Fetch author names
+  const aids = [...new Set(comments.map(c=>c.author_id))];
+  const pRes = await fetch(`${SUPA_URL}/rest/v1/profiles?select=id,full_name&id=in.(${aids.join(',')})`, { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${token}` }});
+  const profiles = await pRes.json();
+  const pMap = {};
+  if (Array.isArray(profiles)) profiles.forEach(p=>pMap[p.id]=p.full_name);
+  list.innerHTML = comments.map(c=>`
+    <div style="padding:12px 14px;border-radius:12px;background:#f8fafc">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span style="font-weight:700;font-size:13px;color:#1e293b">${pMap[c.author_id]||'Unknown'}</span>
+        <span style="font-size:11px;color:#94a3b8">${timeSince(c.created_at)}</span>
+      </div>
+      <div style="font-size:13px;color:#434653">${c.body}</div>
+    </div>`).join('');
+}
+
+async function submitComment(noteId) {
+  const body = document.getElementById('comment-input')?.value?.trim();
+  if (!body) { showToast('Please write a comment first', true); return; }
+  if (!currentUser) { showToast('Sign in to comment', true); return; }
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPA_KEY;
+  const res = await fetch(`${SUPA_URL}/rest/v1/comments`, {
+    method: 'POST',
+    headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify({ note_id: noteId, author_id: currentUser.id, body })
+  });
+  if (res.ok) {
+    document.getElementById('comment-input').value = '';
+    showToast('+1 point earned for commenting! 💬');
+    await loadComments(noteId);
+  } else {
+    const t = await res.text();
+    showToast('Error posting comment: '+t, true);
+  }
 }
 
 async function toggleLike(noteId, btn) {
   if (!currentUser) { showToast('Sign in to like notes', true); return; }
-  const { data: existing } = await sb.from('likes').select('id').eq('note_id',noteId).eq('user_id',currentUser.id).single();
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPA_KEY;
+  const headers = { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' };
   const countEl = document.getElementById('like-count-'+noteId);
   const icon = btn.querySelector('.material-symbols-outlined');
-  if (existing) {
-    await sb.from('likes').delete().eq('note_id',noteId).eq('user_id',currentUser.id);
-    icon.classList.remove('fill-icon');
-    if (countEl) countEl.textContent = Math.max(0, parseInt(countEl.textContent)-1);
-  } else {
-    await sb.from('likes').insert({note_id:noteId, user_id:currentUser.id});
-    icon.classList.add('fill-icon');
-    icon.style.color='#ba1a1a';
-    if (countEl) countEl.textContent = parseInt(countEl.textContent)+1;
-    showToast('+2 points earned for the author!');
-  }
+  try {
+    // Check if already liked
+    const checkRes = await fetch(`${SUPA_URL}/rest/v1/likes?note_id=eq.${noteId}&user_id=eq.${currentUser.id}&select=id`, { headers });
+    const existing = await checkRes.json();
+    if (Array.isArray(existing) && existing.length > 0) {
+      // Unlike
+      await fetch(`${SUPA_URL}/rest/v1/likes?note_id=eq.${noteId}&user_id=eq.${currentUser.id}`, { method: 'DELETE', headers });
+      icon.classList.remove('fill-icon');
+      icon.style.color = '';
+      if (countEl) countEl.textContent = Math.max(0, parseInt(countEl.textContent) - 1);
+    } else {
+      // Like
+      await fetch(`${SUPA_URL}/rest/v1/likes`, {
+        method: 'POST',
+        headers: { ...headers, 'Prefer': 'return=minimal' },
+        body: JSON.stringify({ note_id: noteId, user_id: currentUser.id })
+      });
+      icon.classList.add('fill-icon');
+      icon.style.color = '#ba1a1a';
+      if (countEl) countEl.textContent = parseInt(countEl.textContent) + 1;
+      showToast('+2 points earned for the author! ❤️');
+    }
+  } catch(e) { showToast('Could not update like: ' + e.message, true); }
 }
 
 async function downloadNote(noteId, filePath) {
@@ -1203,12 +1313,22 @@ async function submitRequest() {
   if (!topic) { showToast('Please enter the topic you need', true); return; }
   const btn = document.getElementById('request-submit-btn');
   btn.disabled=true; btn.innerHTML='<span class="spinner"></span>Posting...';
-  const { error } = await sb.from('note_requests').insert({ requester_id: currentUser.id, topic, grade, subject, details, status: 'pending' });
-  if (error) { showToast('Error posting request: '+error.message, true); btn.disabled=false; btn.innerHTML='Post Request'; return; }
-  closeModal('request-modal');
-  btn.disabled=false; btn.innerHTML='Post Request';
-  document.getElementById('req-topic').value=''; document.getElementById('req-details').value='';
-  showToast('Request posted! Community has been notified 📢');
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPA_KEY;
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/note_requests`, {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ requester_id: currentUser.id, topic, grade, subject, details, status: 'pending' })
+    });
+    if (!res.ok) { const t = await res.text(); showToast('Error: '+t, true); btn.disabled=false; btn.innerHTML='Post Request'; return; }
+    closeModal('request-modal');
+    btn.disabled=false; btn.innerHTML='Post Request';
+    document.getElementById('req-topic').value=''; document.getElementById('req-details').value='';
+    showToast('Request posted! Community has been notified 📢');
+  } catch(e) { showToast('Error: '+e.message, true); btn.disabled=false; btn.innerHTML='Post Request'; }
 }
 
 // ── NOTIFICATIONS ──────────────────────────────────────────
