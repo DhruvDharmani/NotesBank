@@ -310,20 +310,30 @@ let isRendering = false; // prevent concurrent renders
 
 // ── BOOT ───────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
-  // onAuthStateChange fires immediately with current session — use it as single source of truth
-  sb.auth.onAuthStateChange(async (event, session) => {
+  // Step 1: Check for existing session immediately on load
+  try {
+    const { data: { session } } = await sb.auth.getSession();
     if (session && session.user) {
-      const userChanged = !currentUser || currentUser.id !== session.user.id;
       currentUser = session.user;
-      // Only reload profile if user changed or profile missing
-      if (userChanged || !currentProfile) {
-        await loadProfile();
-      }
-      // Show app if on login screen
-      const loginPage = document.querySelector('[data-page="login"]');
-      if (loginPage && loginPage.style.display !== 'none') {
-        showApp();
-      }
+      await loadProfile();
+      showApp();
+    }
+    // If no session, stay on login page (already visible by default)
+  } catch(e) {
+    console.error('Boot error:', e);
+  }
+
+  // Step 2: Listen for future auth changes (login, logout, token refresh)
+  sb.auth.onAuthStateChange(async (event, session) => {
+    console.log('Auth event:', event);
+    if (event === 'SIGNED_IN' && session && session.user) {
+      currentUser = session.user;
+      await loadProfile();
+      showApp();
+    } else if (event === 'TOKEN_REFRESHED' && session) {
+      currentUser = session.user;
+      // Silently update profile without re-rendering
+      await loadProfile();
     } else if (event === 'SIGNED_OUT') {
       currentUser = null;
       currentProfile = null;
@@ -343,9 +353,15 @@ async function loadProfile() {
   } catch(e) { console.error('loadProfile error:', e); }
 }
 
+let appShown = false;
 function showApp() {
+  if (appShown) return; // prevent double-init
+  appShown = true;
   document.querySelector('[data-page="login"]').style.display = 'none';
   document.querySelector('[data-page="app"]').style.display = 'block';
+  // Reset login button state in case it was mid-loading
+  const loginBtn = document.getElementById('login-btn');
+  if (loginBtn) { loginBtn.disabled = false; loginBtn.innerHTML = 'Sign In'; }
   const adminNav = document.getElementById('nav-admin');
   if (currentProfile?.role === 'moderator' || currentProfile?.role === 'admin') adminNav.style.display = 'flex';
   else adminNav.style.display = 'none';
@@ -354,9 +370,12 @@ function showApp() {
 }
 
 function showLogin() {
+  appShown = false; // allow showApp to run again on next login
   document.querySelector('[data-page="app"]').style.display = 'none';
   document.querySelector('[data-page="login"]').style.display = 'flex';
 }
+
+
 
 function updateSidebarUI() {
   if (!currentProfile) return;
