@@ -293,68 +293,54 @@ tailwind.config = {
 // ── SUPABASE INIT ──────────────────────────────────────────
 const SUPABASE_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_2ugZOBPjgDJk8Myo1qfiDw_0-3NAnpl';
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+});
 
 // ── APP STATE ──────────────────────────────────────────────
-let currentUser = null;   // Supabase auth user
-let currentProfile = null; // profiles table row
+let currentUser = null;
+let currentProfile = null;
 let currentPage = 'dashboard';
 let hubTab = 'find';
 let lbTab = 'global';
 let adminTab = 'pending';
 let notifOpen = false;
 let uploadFile = null;
+let isRendering = false; // prevent concurrent renders
 
 // ── BOOT ───────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
-  const { data: { session } } = await sb.auth.getSession();
-  if (session) {
-    currentUser = session.user;
-    await loadProfile();
-    showApp();
-  } else {
-    showLogin();
-  }
+  // onAuthStateChange fires immediately with current session — use it as single source of truth
   sb.auth.onAuthStateChange(async (event, session) => {
-    if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session) {
+    if (session && session.user) {
+      const userChanged = !currentUser || currentUser.id !== session.user.id;
       currentUser = session.user;
-      await loadProfile();
-      if (document.querySelector('[data-page="login"]').style.display !== 'none') showApp();
-    } else if (event === 'SIGNED_OUT') {
-      currentUser = null; currentProfile = null;
-      showLogin();
-    }
-  });
-  // Re-render when user switches back to this browser tab
-  document.addEventListener('visibilitychange', async () => {
-    if (document.visibilityState === 'visible' && currentUser) {
-      await ensureSession();
-      if (document.querySelector('[data-page="app"]').style.display !== 'none') {
-        await renderPage(currentPage);
+      // Only reload profile if user changed or profile missing
+      if (userChanged || !currentProfile) {
+        await loadProfile();
       }
+      // Show app if on login screen
+      const loginPage = document.querySelector('[data-page="login"]');
+      if (loginPage && loginPage.style.display !== 'none') {
+        showApp();
+      }
+    } else if (event === 'SIGNED_OUT') {
+      currentUser = null;
+      currentProfile = null;
+      showLogin();
     }
   });
 });
 
-async function ensureSession() {
-  try {
-    const { data: { session } } = await sb.auth.getSession();
-    if (!session) {
-      const { data: refreshed } = await sb.auth.refreshSession();
-      if (refreshed?.session) { currentUser = refreshed.session.user; }
-      else { currentUser = null; currentProfile = null; showLogin(); return false; }
-    } else {
-      currentUser = session.user;
-    }
-    await loadProfile();
-    return true;
-  } catch(e) { return false; }
-}
-
 async function loadProfile() {
   if (!currentUser) return;
-  const { data } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
-  if (data) { currentProfile = data; updateSidebarUI(); }
+  try {
+    const { data, error } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
+    if (data) {
+      currentProfile = data;
+      updateSidebarUI();
+    }
+  } catch(e) { console.error('loadProfile error:', e); }
 }
 
 function showApp() {
@@ -465,6 +451,8 @@ function showAuthError(el, msg) {
 
 // ── NAVIGATION ─────────────────────────────────────────────
 async function navigate(page) {
+  if (isRendering) return; // prevent double-renders
+  isRendering = true;
   currentPage = page;
   document.querySelectorAll('.nav-link').forEach(el=>el.classList.remove('active'));
   const navEl = document.getElementById('nav-'+page);
@@ -472,12 +460,21 @@ async function navigate(page) {
   const titles = {dashboard:'Dashboard',hub:'Notes Hub',leaderboard:'Leaderboard',profile:'My Profile',admin:'Moderation Panel'};
   document.getElementById('page-title').textContent = titles[page]||'NotesBank';
   if (notifOpen) toggleNotifications();
-  const content = document.getElementById('page-content');
-  content.innerHTML = skeletonLoader();
-  // Always ensure session + fresh profile before rendering
-  const ok = await ensureSession();
-  if (!ok) return;
-  await renderPage(page);
+  document.getElementById('page-content').innerHTML = skeletonLoader();
+  try {
+    // Reload profile silently before every render to keep data fresh
+    await loadProfile();
+    await renderPage(page);
+  } catch(e) {
+    console.error('Navigation error:', e);
+    document.getElementById('page-content').innerHTML = `<div style="text-align:center;padding:64px;color:#64748b">
+      <span class="material-symbols-outlined" style="font-size:48px;display:block;margin-bottom:12px">error_outline</span>
+      <div style="font-weight:700;margin-bottom:8px">Something went wrong loading this page</div>
+      <button onclick="navigate('${page}')" class="btn-primary" style="padding:10px 20px">Try Again</button>
+    </div>`;
+  } finally {
+    isRendering = false;
+  }
 }
 
 function skeletonLoader() {
@@ -906,11 +903,15 @@ async function renderAdmin() {
     document.getElementById('page-content').innerHTML = '<div style="text-align:center;padding:64px;color:#64748b">Access denied. Moderator role required.</div>';
     return;
   }
-  // Fetch all notes regardless of status for moderators
-  const { data: allNotes } = await sb.from('notes').select('*, profiles(full_name)').order('created_at',{ascending:false});
-  const pending = (allNotes||[]).filter(n=>n.status==='pending');
-  const flagged = (allNotes||[]).filter(n=>n.status==='flagged');
-  const approved = (allNotes||[]).filter(n=>n.status==='approved');
+  // Fetch notes for each status separately — more reliable with RLS
+  const [pendingRes, flaggedRes, approvedRes] = await Promise.all([
+    sb.from('notes').select('id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)').eq('status','pending').order('created_at',{ascending:false}),
+    sb.from('notes').select('id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)').eq('status','flagged').order('created_at',{ascending:false}),
+    sb.from('notes').select('id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)').eq('status','approved').order('created_at',{ascending:false}).limit(30),
+  ]);
+  const pending = pendingRes.data || [];
+  const flagged = flaggedRes.data || [];
+  const approved = approvedRes.data || [];
   const listData = adminTab==='pending'?pending:adminTab==='flagged'?flagged:approved;
 
   document.getElementById('page-content').innerHTML = `
