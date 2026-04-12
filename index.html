@@ -533,20 +533,34 @@ async function renderDashboard() {
   const p = currentProfile;
   const progressPct = Math.min(((p.points % 500) / 500 * 100), 100);
 
-  // Load recent notes (approved)
-  const { data: recentNotes } = await sb.from('notes')
-    .select('*, profiles(full_name)')
-    .eq('status','approved')
-    .order('created_at',{ascending:false})
-    .limit(3);
+  const SUPA_URL2 = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY2 = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session: dashSession } } = await sb.auth.getSession();
+  const dashToken = dashSession?.access_token || SUPA_KEY2;
+  const dashHeaders = { 'apikey': SUPA_KEY2, 'Authorization': `Bearer ${dashToken}` };
 
-  // Load my requests
-  const { data: myRequests } = await sb.from('note_requests')
-    .select('*').eq('requester_id', p.id).order('created_at',{ascending:false}).limit(3);
-
-  // Load my notes
-  const { data: myNotes } = await sb.from('notes')
-    .select('*').eq('author_id', p.id).order('created_at',{ascending:false}).limit(3);
+  // Load recent notes, my notes, my requests via direct REST
+  let recentNotes = [], myNotes = [], myRequests = [];
+  try {
+    const [rnRes, mnRes, mrRes] = await Promise.all([
+      fetch(`${SUPA_URL2}/rest/v1/notes?select=id,title,grade,subject,format,like_count,view_count,comment_count,file_path,author_id&status=eq.approved&order=created_at.desc&limit=3`, { headers: dashHeaders }),
+      fetch(`${SUPA_URL2}/rest/v1/notes?select=id,title,subject,grade,like_count,view_count,status&author_id=eq.${p.id}&order=created_at.desc&limit=3`, { headers: dashHeaders }),
+      fetch(`${SUPA_URL2}/rest/v1/note_requests?select=id,topic,grade,subject,status&requester_id=eq.${p.id}&order=created_at.desc&limit=3`, { headers: dashHeaders }),
+    ]);
+    const rnRaw = await rnRes.json();
+    const mnRaw = await mnRes.json();
+    const mrRaw = await mrRes.json();
+    myNotes = Array.isArray(mnRaw) ? mnRaw : [];
+    myRequests = Array.isArray(mrRaw) ? mrRaw : [];
+    if (Array.isArray(rnRaw) && rnRaw.length > 0) {
+      const aids = [...new Set(rnRaw.map(n=>n.author_id))];
+      const pRes = await fetch(`${SUPA_URL2}/rest/v1/profiles?select=id,full_name&id=in.(${aids.join(',')})`, { headers: dashHeaders });
+      const profs = await pRes.json();
+      const pMap = {};
+      if (Array.isArray(profs)) profs.forEach(p=>pMap[p.id]=p.full_name);
+      recentNotes = rnRaw.map(n=>({...n, profiles:{full_name:pMap[n.author_id]||'Unknown'}}));
+    }
+  } catch(e) { console.error('Dashboard fetch error:', e); }
 
   const initials = p.full_name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
 
@@ -627,18 +641,43 @@ async function renderDashboard() {
 
 // ── NOTES HUB ──────────────────────────────────────────────
 async function renderHub() {
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session: hubSession } } = await sb.auth.getSession();
+  const hubToken = hubSession?.access_token || SUPA_KEY;
+
   let notesData = [], requestsData = [];
   if (hubTab === 'find') {
-    const { data } = await sb.from('notes')
-      .select('*, profiles(full_name)')
-      .eq('status','approved')
-      .order('created_at',{ascending:false});
-    notesData = data || [];
+    try {
+      const res = await fetch(
+        `${SUPA_URL}/rest/v1/notes?select=id,title,grade,subject,topic,format,status,like_count,view_count,comment_count,file_path,created_at,author_id&status=eq.approved&order=created_at.desc`,
+        { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${hubToken}` } }
+      );
+      const notes = await res.json();
+      if (Array.isArray(notes) && notes.length > 0) {
+        // Fetch author names
+        const authorIds = [...new Set(notes.map(n => n.author_id))];
+        const profRes = await fetch(
+          `${SUPA_URL}/rest/v1/profiles?select=id,full_name&id=in.(${authorIds.join(',')})`,
+          { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${hubToken}` } }
+        );
+        const profiles = await profRes.json();
+        const profileMap = {};
+        if (Array.isArray(profiles)) profiles.forEach(p => profileMap[p.id] = p.full_name);
+        notesData = notes.map(n => ({ ...n, profiles: { full_name: profileMap[n.author_id] || 'Unknown' } }));
+      } else {
+        notesData = [];
+      }
+    } catch(e) { console.error('Hub fetch error:', e); notesData = []; }
   } else {
-    const { data } = await sb.from('note_requests')
-      .select('*, profiles(full_name)')
-      .order('created_at',{ascending:false});
-    requestsData = data || [];
+    try {
+      const res = await fetch(
+        `${SUPA_URL}/rest/v1/note_requests?select=id,topic,grade,subject,status,created_at,requester_id&order=created_at.desc`,
+        { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${hubToken}` } }
+      );
+      const reqs = await res.json();
+      requestsData = Array.isArray(reqs) ? reqs : [];
+    } catch(e) { console.error('Requests fetch error:', e); requestsData = []; }
   }
 
   document.getElementById('page-content').innerHTML = `
@@ -696,12 +735,28 @@ async function renderHub() {
 async function filterNotes() {
   const grade = document.getElementById('filter-grade')?.value;
   const subject = document.getElementById('filter-subject')?.value;
-  let query = sb.from('notes').select('*, profiles(full_name)').eq('status','approved').order('created_at',{ascending:false});
-  if (grade) query = query.eq('grade', grade);
-  if (subject) query = query.eq('subject', subject);
-  const { data } = await query;
-  const grid = document.getElementById('notes-grid');
-  if (grid) grid.innerHTML = data && data.length > 0 ? data.map(n=>noteCardHTML(n)).join('') : '<div style="grid-column:1/-1;text-align:center;padding:48px;color:#64748b">No notes found for these filters.</div>';
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const token = session?.access_token || SUPA_KEY;
+  let url = `${SUPA_URL}/rest/v1/notes?select=id,title,grade,subject,format,like_count,view_count,comment_count,file_path,author_id&status=eq.approved&order=created_at.desc`;
+  if (grade) url += `&grade=eq.${encodeURIComponent(grade)}`;
+  if (subject) url += `&subject=eq.${encodeURIComponent(subject)}`;
+  try {
+    const res = await fetch(url, { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${token}` } });
+    const notes = await res.json();
+    let notesWithAuthors = Array.isArray(notes) ? notes : [];
+    if (notesWithAuthors.length > 0) {
+      const aids = [...new Set(notesWithAuthors.map(n=>n.author_id))];
+      const pRes = await fetch(`${SUPA_URL}/rest/v1/profiles?select=id,full_name&id=in.(${aids.join(',')})`, { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${token}` } });
+      const profs = await pRes.json();
+      const pMap = {};
+      if (Array.isArray(profs)) profs.forEach(p=>pMap[p.id]=p.full_name);
+      notesWithAuthors = notesWithAuthors.map(n=>({...n, profiles:{full_name:pMap[n.author_id]||'Unknown'}}));
+    }
+    const grid = document.getElementById('notes-grid');
+    if (grid) grid.innerHTML = notesWithAuthors.length > 0 ? notesWithAuthors.map(n=>noteCardHTML(n)).join('') : '<div style="grid-column:1/-1;text-align:center;padding:48px;color:#64748b">No notes found for these filters.</div>';
+  } catch(e) { console.error('Filter error:', e); }
 }
 
 function noteCardHTML(n) {
