@@ -1010,6 +1010,7 @@ async function renderAdmin() {
           <div style="display:flex;gap:8px">
             ${n.status!=='approved'?`<button onclick="moderateNote(${n.id},'approved')" class="btn-primary" style="padding:8px 14px;font-size:12px;display:flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:15px">check</span>Approve</button>`:''}
             ${n.status==='approved'?`<button onclick="moderateNote(${n.id},'pending')" style="padding:8px 14px;font-size:12px;border-radius:10px;border:2px solid #e2e2eb;background:white;color:#434653;cursor:pointer;font-family:'Manrope',sans-serif;font-weight:700">Unpublish</button>`:''}
+            <button onclick="viewNoteFile(${n.id})" style="padding:8px 14px;font-size:12px;border-radius:10px;border:2px solid #dae2ff;background:white;color:#00327d;cursor:pointer;font-family:'Manrope',sans-serif;font-weight:700;display:flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:15px">visibility</span>View</button>
             <button onclick="moderateNote(${n.id},'flagged')" style="padding:8px 14px;font-size:12px;border-radius:10px;border:2px solid rgba(186,26,26,0.2);background:white;color:#ba1a1a;cursor:pointer;font-family:'Manrope',sans-serif;font-weight:700;display:flex;align-items:center;gap:4px"><span class="material-symbols-outlined" style="font-size:15px">flag</span>${n.status==='flagged'?'Flagged':'Flag'}</button>
           </div>
         </div>`).join('') : `<div style="text-align:center;padding:48px;color:#64748b;border:2px dashed #e2e2eb;border-radius:20px">No ${adminTab} notes to review.</div>`}
@@ -1023,6 +1024,39 @@ async function renderAdmin() {
       </div>
     </div>`:``}
   </div>`;
+}
+
+async function viewNoteFile(noteId) {
+  // Fetch the file_path for this note
+  const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
+  const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
+  const { data: { session } } = await sb.auth.getSession();
+  const accessToken = session?.access_token || SUPA_KEY;
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/notes?select=file_path&id=eq.${noteId}`, {
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${accessToken}` }
+    });
+    const data = await res.json();
+    const filePath = data?.[0]?.file_path;
+    if (!filePath) { showToast('No file attached to this note', true); return; }
+    // Get signed URL from Supabase Storage
+    const urlRes = await fetch(`${SUPA_URL}/storage/v1/object/sign/notes/${filePath}`, {
+      method: 'POST',
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresIn: 300 })
+    });
+    const urlData = await urlRes.json();
+    if (urlData?.signedURL) {
+      window.open(`${SUPA_URL}/storage/v1${urlData.signedURL}`, '_blank');
+    } else if (urlData?.signedUrl) {
+      window.open(urlData.signedUrl, '_blank');
+    } else {
+      // Fallback: try direct public URL
+      window.open(`${SUPA_URL}/storage/v1/object/public/notes/${filePath}`, '_blank');
+    }
+  } catch(e) {
+    showToast('Could not open file: ' + e.message, true);
+  }
 }
 
 async function moderateNote(id, status) {
