@@ -340,32 +340,25 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Step 3: When user returns to this tab, refresh session silently then re-render
+  // Step 3: When user returns to this tab, ONLY refresh session — do NOT re-render
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState !== 'visible') return;
     if (!currentUser) return;
     try {
-      // Force a fresh session check
       const { data: { session } } = await sb.auth.getSession();
-      if (!session) {
-        // Try to refresh the token
-        const { data: refreshed, error } = await sb.auth.refreshSession();
-        if (error || !refreshed?.session) {
-          // Session truly expired — send to login
+      if (session) {
+        // Session still valid — just update token silently, no re-render
+        currentUser = session.user;
+      } else {
+        // Session expired — refresh token silently
+        const { data: refreshed } = await sb.auth.refreshSession();
+        if (refreshed?.session) {
+          currentUser = refreshed.session.user;
+        } else {
+          // Truly expired — go to login
           currentUser = null; currentProfile = null;
           showLogin();
-          return;
         }
-        currentUser = refreshed.session.user;
-      } else {
-        currentUser = session.user;
-      }
-      // Reload profile silently
-      await loadProfile();
-      // Re-render current page with fresh data only if app is visible
-      const appEl = document.querySelector('[data-page="app"]');
-      if (appEl && appEl.style.display !== 'none' && !isRendering) {
-        await renderPage(currentPage);
       }
     } catch(e) {
       console.error('Visibility refresh error:', e);
@@ -519,8 +512,8 @@ async function navigate(page) {
   if (notifOpen) toggleNotifications();
   document.getElementById('page-content').innerHTML = skeletonLoader();
   try {
-    // Reload profile silently before every render to keep data fresh
-    await loadProfile();
+    // Only reload profile if it's missing, not on every navigation
+    if (!currentProfile) await loadProfile();
     await renderPage(page);
   } catch(e) {
     console.error('Navigation error:', e);
