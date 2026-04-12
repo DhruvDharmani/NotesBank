@@ -929,15 +929,19 @@ async function renderAdmin() {
     document.getElementById('page-content').innerHTML = '<div style="text-align:center;padding:64px;color:#64748b">Access denied. Moderator role required.</div>';
     return;
   }
-  // Fetch notes for each status separately — more reliable with RLS
-  const [pendingRes, flaggedRes, approvedRes] = await Promise.all([
-    sb.from('notes').select('id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)').eq('status','pending').order('created_at',{ascending:false}),
-    sb.from('notes').select('id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)').eq('status','flagged').order('created_at',{ascending:false}),
-    sb.from('notes').select('id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)').eq('status','approved').order('created_at',{ascending:false}).limit(30),
-  ]);
-  const pending = pendingRes.data || [];
-  const flagged = flaggedRes.data || [];
-  const approved = approvedRes.data || [];
+  // Fetch ALL notes with no filters at all
+  const { data: allNotesRaw, error: notesErr } = await sb
+    .from('notes')
+    .select('id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)');
+
+  console.log('Admin fetch result:', allNotesRaw, 'Error:', notesErr);
+
+  const allNotes = allNotesRaw || [];
+  const pending = allNotes.filter(n => n.status === 'pending');
+  const flagged = allNotes.filter(n => n.status === 'flagged');
+  const approved = allNotes.filter(n => n.status === 'approved');
+
+  console.log('Pending:', pending.length, 'Flagged:', flagged.length, 'Approved:', approved.length);
   const listData = adminTab==='pending'?pending:adminTab==='flagged'?flagged:approved;
 
   document.getElementById('page-content').innerHTML = `
