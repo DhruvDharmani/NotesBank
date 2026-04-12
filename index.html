@@ -929,7 +929,7 @@ async function renderAdmin() {
     document.getElementById('page-content').innerHTML = '<div style="text-align:center;padding:64px;color:#64748b">Access denied. Moderator role required.</div>';
     return;
   }
-  // Use direct REST fetch to bypass any client-side issues
+  // Fetch notes via direct REST — no ambiguous joins
   const SUPA_URL = 'https://dyvuomnqrxpzxkthclss.supabase.co';
   const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR5dnVvbW5xcnhwenhrdGhjbHNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2NDc3ODgsImV4cCI6MjA5MTIyMzc4OH0.FKhj-hF5S31qi2HQGEaj1CmT7UPFb1tYl-HAOVj5dCw';
   const { data: { session } } = await sb.auth.getSession();
@@ -937,8 +937,9 @@ async function renderAdmin() {
 
   let allNotes = [];
   try {
+    // Fetch notes without the ambiguous profiles join
     const res = await fetch(
-      `${SUPA_URL}/rest/v1/notes?select=id,title,grade,subject,format,status,created_at,author_id,profiles(full_name)&order=created_at.desc`,
+      `${SUPA_URL}/rest/v1/notes?select=id,title,grade,subject,format,status,created_at,author_id&order=created_at.desc`,
       {
         headers: {
           'apikey': SUPA_KEY,
@@ -948,12 +949,26 @@ async function renderAdmin() {
         }
       }
     );
-    const text = await res.text();
-    console.log('Direct REST response status:', res.status);
-    console.log('Direct REST response:', text.substring(0, 300));
-    allNotes = JSON.parse(text) || [];
+    console.log('REST status:', res.status);
+    const parsed = await res.json();
+    console.log('REST parsed:', parsed);
+    // Only use if it is actually an array
+    allNotes = Array.isArray(parsed) ? parsed : [];
+
+    // Fetch author names separately and merge
+    if (allNotes.length > 0) {
+      const authorIds = [...new Set(allNotes.map(n => n.author_id))];
+      const profRes = await fetch(
+        `${SUPA_URL}/rest/v1/profiles?select=id,full_name&id=in.(${authorIds.join(',')})`,
+        { headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${accessToken}` } }
+      );
+      const profiles = await profRes.json();
+      const profileMap = {};
+      if (Array.isArray(profiles)) profiles.forEach(p => profileMap[p.id] = p.full_name);
+      allNotes = allNotes.map(n => ({ ...n, author_name: profileMap[n.author_id] || 'Unknown' }));
+    }
   } catch(e) {
-    console.error('Direct REST error:', e);
+    console.error('REST error:', e);
   }
 
   const pending = allNotes.filter(n => n.status === 'pending');
@@ -989,7 +1004,7 @@ async function renderAdmin() {
           <div style="width:42px;height:42px;border-radius:12px;background:#dae2ff;display:flex;align-items:center;justify-content:center;flex-shrink:0"><span class="material-symbols-outlined" style="color:#00327d">description</span></div>
           <div style="flex:1;min-width:180px">
             <div style="font-weight:700;font-size:14px;color:#1e293b">${n.title}</div>
-            <div style="font-size:12px;color:#64748b;margin-top:3px">by ${n.profiles?.full_name||'Unknown'} · ${n.grade} · ${n.subject} · ${n.format} · ${timeSince(n.created_at)}</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px">by ${n.author_name||n.profiles?.full_name||'Unknown'} · ${n.grade} · ${n.subject} · ${n.format} · ${timeSince(n.created_at)}</div>
           </div>
           <span class="badge" style="background:${n.status==='pending'?'rgba(255,223,158,0.5)':n.status==='flagged'?'rgba(255,218,214,0.6)':'rgba(160,243,153,0.4)'};color:${n.status==='pending'?'#5b4300':n.status==='flagged'?'#93000a':'#217128'}">${n.status}</span>
           <div style="display:flex;gap:8px">
