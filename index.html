@@ -332,12 +332,43 @@ window.addEventListener('DOMContentLoaded', async () => {
       showApp();
     } else if (event === 'TOKEN_REFRESHED' && session) {
       currentUser = session.user;
-      // Silently update profile without re-rendering
       await loadProfile();
     } else if (event === 'SIGNED_OUT') {
       currentUser = null;
       currentProfile = null;
       showLogin();
+    }
+  });
+
+  // Step 3: When user returns to this tab, refresh session silently then re-render
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState !== 'visible') return;
+    if (!currentUser) return;
+    try {
+      // Force a fresh session check
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) {
+        // Try to refresh the token
+        const { data: refreshed, error } = await sb.auth.refreshSession();
+        if (error || !refreshed?.session) {
+          // Session truly expired — send to login
+          currentUser = null; currentProfile = null;
+          showLogin();
+          return;
+        }
+        currentUser = refreshed.session.user;
+      } else {
+        currentUser = session.user;
+      }
+      // Reload profile silently
+      await loadProfile();
+      // Re-render current page with fresh data only if app is visible
+      const appEl = document.querySelector('[data-page="app"]');
+      if (appEl && appEl.style.display !== 'none' && !isRendering) {
+        await renderPage(currentPage);
+      }
+    } catch(e) {
+      console.error('Visibility refresh error:', e);
     }
   });
 });
