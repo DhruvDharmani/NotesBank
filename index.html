@@ -322,18 +322,23 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Step 2: Listen for future auth changes (login, logout, token refresh)
   sb.auth.onAuthStateChange(async (event, session) => {
     console.log('Auth event:', event);
-    if (event === 'SIGNED_IN' && session && session.user) {
-      currentUser = session.user;
-      await loadProfile();
-      showApp();
-    } else if (event === 'TOKEN_REFRESHED' && session) {
-      currentUser = session.user;
-      await loadProfile();
-    } else if (event === 'SIGNED_OUT') {
+    if (event === 'SIGNED_OUT') {
       currentUser = null;
       currentProfile = null;
       showLogin();
+      return;
     }
+    if (!session || !session.user) return;
+    // Always update currentUser silently
+    currentUser = session.user;
+    // ONLY show the app if we are currently on the login page
+    // Never re-render if already inside the app
+    const onLoginPage = document.querySelector('[data-page="login"]').style.display !== 'none';
+    if (event === 'SIGNED_IN' && onLoginPage) {
+      await loadProfile();
+      showApp();
+    }
+    // TOKEN_REFRESHED and any other events: do absolutely nothing to the UI
   });
 
   // Step 3: On tab return — silently refresh token only, NEVER touch page content
