@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>NotesBank | The Academic Curator</title>
+<title>NotesBank | notesbank.org</title>
 <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
@@ -83,11 +83,7 @@ tailwind.config = {
       <div class="inline-block px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest" style="background:rgba(255,255,255,0.15)">Student Knowledge Hub</div>
       <h1 class="text-5xl font-extrabold font-headline leading-tight">Share knowledge.<br/>Earn recognition.<br/><span style="color:#ffdf9e">Rise together.</span></h1>
       <p class="text-lg opacity-80">A peer-powered academic portal where students exchange notes, request resources, and compete on a leaderboard.</p>
-      <div class="flex gap-6 pt-4">
-        <div><div class="text-3xl font-extrabold font-headline">12k+</div><div class="text-sm opacity-70">Students</div></div>
-        <div><div class="text-3xl font-extrabold font-headline">48k+</div><div class="text-sm opacity-70">Notes Shared</div></div>
-        <div><div class="text-3xl font-extrabold font-headline">950+</div><div class="text-sm opacity-70">Schools</div></div>
-      </div>
+
     </div>
     <div class="relative z-10 flex gap-3 flex-wrap">
       <div style="background:rgba(255,255,255,0.1);border-radius:16px;padding:16px 20px">
@@ -340,29 +336,31 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Step 3: When user returns to this tab, ONLY refresh session — do NOT re-render
-  document.addEventListener('visibilitychange', async () => {
+  // Step 3: On tab return — silently refresh token only, NEVER touch page content
+  let lastRefreshTime = 0;
+  document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     if (!currentUser) return;
-    try {
-      const { data: { session } } = await sb.auth.getSession();
+    const now = Date.now();
+    // Throttle: only refresh once every 30 seconds max
+    if (now - lastRefreshTime < 30000) return;
+    lastRefreshTime = now;
+    // Non-blocking background refresh — no await, no re-render
+    sb.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        // Session still valid — just update token silently, no re-render
         currentUser = session.user;
       } else {
-        // Session expired — refresh token silently
-        const { data: refreshed } = await sb.auth.refreshSession();
-        if (refreshed?.session) {
-          currentUser = refreshed.session.user;
-        } else {
-          // Truly expired — go to login
-          currentUser = null; currentProfile = null;
-          showLogin();
-        }
+        sb.auth.refreshSession().then(({ data: refreshed }) => {
+          if (refreshed?.session) {
+            currentUser = refreshed.session.user;
+          } else {
+            currentUser = null;
+            currentProfile = null;
+            showLogin();
+          }
+        });
       }
-    } catch(e) {
-      console.error('Visibility refresh error:', e);
-    }
+    }).catch(e => console.error('Tab refresh error:', e));
   });
 });
 
@@ -512,8 +510,7 @@ async function navigate(page) {
   if (notifOpen) toggleNotifications();
   document.getElementById('page-content').innerHTML = skeletonLoader();
   try {
-    // Only reload profile if it's missing, not on every navigation
-    if (!currentProfile) await loadProfile();
+    // Never reload profile during navigation — it's kept fresh by auth listener
     await renderPage(page);
   } catch(e) {
     console.error('Navigation error:', e);
