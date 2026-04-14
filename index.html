@@ -499,8 +499,8 @@ function showAuthError(el, msg) {
 
 // ── NAVIGATION ─────────────────────────────────────────────
 async function navigate(page) {
-  if (isRendering) return; // prevent double-renders
-  isRendering = true;
+  // Always reset isRendering first — never let a stale true block navigation
+  isRendering = false;
   currentPage = page;
   document.querySelectorAll('.nav-link').forEach(el=>el.classList.remove('active'));
   const navEl = document.getElementById('nav-'+page);
@@ -509,8 +509,8 @@ async function navigate(page) {
   document.getElementById('page-title').textContent = titles[page]||'NotesBank';
   if (notifOpen) toggleNotifications();
   document.getElementById('page-content').innerHTML = skeletonLoader();
+  isRendering = true;
   try {
-    // Never reload profile during navigation — it's kept fresh by auth listener
     await renderPage(page);
   } catch(e) {
     console.error('Navigation error:', e);
