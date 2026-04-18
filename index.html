@@ -112,7 +112,13 @@ tailwind.config = {
         <div><h2 class="text-3xl font-extrabold font-headline text-blue-900">Welcome back</h2><p class="text-sm mt-1" style="color:#434653">Sign in to your student account</p></div>
         <div class="space-y-4">
           <div><label class="block text-xs font-bold uppercase tracking-wide mb-2" style="color:#434653">Email Address</label><input id="login-email" type="email" placeholder="student@school.edu" class="input-field" style="background:#f3f3fc"/></div>
-          <div><label class="block text-xs font-bold uppercase tracking-wide mb-2" style="color:#434653">Password</label><input id="login-password" type="password" placeholder="••••••••" class="input-field" style="background:#f3f3fc"/></div>
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <label class="block text-xs font-bold uppercase tracking-wide" style="color:#434653">Password</label>
+              <button onclick="openForgotPassword()" type="button" style="font-size:12px;font-weight:700;color:#00327d;background:none;border:none;cursor:pointer;font-family:'Manrope',sans-serif">Forgot password?</button>
+            </div>
+            <input id="login-password" type="password" placeholder="••••••••" class="input-field" style="background:#f3f3fc"/>
+          </div>
         </div>
         <div id="login-error" style="display:none;padding:10px 14px;border-radius:10px;background:#ffdad6;color:#93000a;font-size:13px;font-weight:600"></div>
         <button onclick="doLogin()" id="login-btn" class="btn-primary w-full" style="padding:14px;font-size:15px;width:100%">Sign In</button>
@@ -209,6 +215,37 @@ tailwind.config = {
     <button onclick="navigate('leaderboard')" style="display:flex;flex-direction:column;align-items:center;gap:3px;color:#64748b;background:none;border:none;cursor:pointer;font-size:10px;font-weight:700;text-transform:uppercase;font-family:'Manrope',sans-serif"><span class="material-symbols-outlined" style="font-size:22px">emoji_events</span>Rank</button>
     <button onclick="navigate('profile')" style="display:flex;flex-direction:column;align-items:center;gap:3px;color:#64748b;background:none;border:none;cursor:pointer;font-size:10px;font-weight:700;text-transform:uppercase;font-family:'Manrope',sans-serif"><span class="material-symbols-outlined" style="font-size:22px">person</span>Profile</button>
   </nav>
+</div>
+
+<!-- FORGOT PASSWORD MODAL -->
+<div class="modal-overlay" id="forgot-modal">
+  <div style="background:white;border-radius:28px;padding:32px;width:100%;max-width:420px;margin:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">
+      <div><h3 class="font-headline" style="font-size:22px;font-weight:800;color:#1e3a5f">Reset Password</h3><p style="font-size:13px;color:#64748b;margin-top:2px">We'll send you a reset link</p></div>
+      <button onclick="closeModal('forgot-modal')" style="padding:8px;border-radius:50%;border:none;background:#f1f5f9;cursor:pointer;color:#64748b"><span class="material-symbols-outlined">close</span></button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div><label style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">Email Address</label><input id="forgot-email" type="email" placeholder="student@school.edu" class="input-field"/></div>
+      <div id="forgot-msg" style="display:none;padding:12px 14px;border-radius:12px;font-size:13px;font-weight:600"></div>
+      <button onclick="submitForgotPassword()" id="forgot-btn" class="btn-primary" style="padding:14px;font-size:15px;width:100%">Send Reset Link</button>
+    </div>
+  </div>
+</div>
+
+<!-- RESET PASSWORD MODAL -->
+<div class="modal-overlay" id="reset-modal">
+  <div style="background:white;border-radius:28px;padding:32px;width:100%;max-width:420px;margin:16px">
+    <div style="margin-bottom:24px">
+      <h3 class="font-headline" style="font-size:22px;font-weight:800;color:#1e3a5f">Set New Password</h3>
+      <p style="font-size:13px;color:#64748b;margin-top:2px">Enter your new password below</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <div><label style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">New Password</label><input id="reset-password" type="password" placeholder="At least 6 characters" class="input-field"/></div>
+      <div><label style="display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:6px">Confirm Password</label><input id="reset-password-confirm" type="password" placeholder="Repeat your new password" class="input-field"/></div>
+      <div id="reset-msg" style="display:none;padding:12px 14px;border-radius:12px;font-size:13px;font-weight:600"></div>
+      <button onclick="submitResetPassword()" id="reset-btn" class="btn-primary" style="padding:14px;font-size:15px;width:100%">Update Password</button>
+    </div>
+  </div>
 </div>
 
 <!-- UPLOAD MODAL -->
@@ -329,14 +366,18 @@ window.addEventListener('DOMContentLoaded', async () => {
       return;
     }
     if (!session || !session.user) return;
-    // Always update currentUser silently
     currentUser = session.user;
-    // ONLY show the app if we are currently on the login page
-    // Never re-render if already inside the app
     const onLoginPage = document.querySelector('[data-page="login"]').style.display !== 'none';
     if (event === 'SIGNED_IN' && onLoginPage) {
       await loadProfile();
       showApp();
+    } else if (event === 'PASSWORD_RECOVERY') {
+      // User clicked reset link in email — show reset password modal
+      currentUser = session.user;
+      const appEl = document.querySelector('[data-page="app"]');
+      if (appEl) appEl.style.display = 'block';
+      document.querySelector('[data-page="login"]').style.display = 'none';
+      setTimeout(() => openModal('reset-modal'), 500);
     }
     // TOKEN_REFRESHED and any other events: do absolutely nothing to the UI
   });
@@ -495,6 +536,69 @@ async function doRegister() {
 
 async function doLogout() {
   await sb.auth.signOut();
+}
+
+// ── FORGOT PASSWORD ────────────────────────────────────────
+function openForgotPassword() {
+  document.getElementById('forgot-email').value = '';
+  document.getElementById('forgot-msg').style.display = 'none';
+  openModal('forgot-modal');
+}
+
+async function submitForgotPassword() {
+  const email = document.getElementById('forgot-email').value.trim();
+  const btn = document.getElementById('forgot-btn');
+  const msg = document.getElementById('forgot-msg');
+  if (!email) { showForgotMsg('Please enter your email address', false); return; }
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Sending...';
+  const { error } = await sb.auth.resetPasswordForEmail(email, {
+    redirectTo: 'https://notesbank.org'
+  });
+  btn.disabled = false;
+  btn.innerHTML = 'Send Reset Link';
+  if (error) {
+    showForgotMsg('Error: ' + error.message, false);
+  } else {
+    showForgotMsg('Reset link sent! Check your email inbox.', true);
+    setTimeout(() => closeModal('forgot-modal'), 3000);
+  }
+}
+
+function showForgotMsg(text, success) {
+  const msg = document.getElementById('forgot-msg');
+  msg.textContent = text;
+  msg.style.display = 'block';
+  msg.style.background = success ? 'rgba(160,243,153,0.3)' : 'rgba(255,218,214,0.6)';
+  msg.style.color = success ? '#217128' : '#93000a';
+}
+
+async function submitResetPassword() {
+  const password = document.getElementById('reset-password').value;
+  const confirm = document.getElementById('reset-password-confirm').value;
+  const btn = document.getElementById('reset-btn');
+  const msg = document.getElementById('reset-msg');
+  if (!password || password.length < 6) { showResetMsg('Password must be at least 6 characters', false); return; }
+  if (password !== confirm) { showResetMsg('Passwords do not match', false); return; }
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Updating...';
+  const { error } = await sb.auth.updateUser({ password });
+  btn.disabled = false;
+  btn.innerHTML = 'Update Password';
+  if (error) {
+    showResetMsg('Error: ' + error.message, false);
+  } else {
+    showResetMsg('Password updated successfully!', true);
+    setTimeout(() => { closeModal('reset-modal'); navigate('dashboard'); }, 2000);
+  }
+}
+
+function showResetMsg(text, success) {
+  const msg = document.getElementById('reset-msg');
+  msg.textContent = text;
+  msg.style.display = 'block';
+  msg.style.background = success ? 'rgba(160,243,153,0.3)' : 'rgba(255,218,214,0.6)';
+  msg.style.color = success ? '#217128' : '#93000a';
 }
 
 function showAuthError(el, msg) {
